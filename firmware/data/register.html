@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ลงทะเบียนบัตร — IdeaSpark</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, "Noto Sans Thai", sans-serif;
+      max-width: 28em;
+      margin: 2em auto;
+      padding: 0 1em;
+      color: #222;
+      background: #f8f8f8;
+    }
+    h1 { font-size: 1.4em; margin: 0 0 1em; }
+    label { display: block; margin: 1em 0 .3em; font-weight: 600; }
+    select, button {
+      width: 100%;
+      padding: .7em;
+      font-size: 1em;
+      border-radius: 6px;
+      border: 1px solid #bbb;
+      background: white;
+    }
+    button {
+      margin-top: 1em;
+      background: #2563eb;
+      color: white;
+      border: none;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:disabled { background: #aaa; cursor: not-allowed; }
+    .selected {
+      margin: 1em 0;
+      padding: .8em 1em;
+      background: #eff6ff;
+      border-left: 4px solid #2563eb;
+      border-radius: 4px;
+    }
+    .selected-label {
+      display: block;
+      font-size: .85em;
+      color: #475569;
+      margin-bottom: .2em;
+    }
+    .selected strong {
+      font-size: 1.3em;
+      color: #1e3a8a;
+    }
+    .uid {
+      margin: 1em 0;
+      padding: 1em;
+      border: 2px dashed #bbb;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 1.2em;
+      text-align: center;
+      color: #555;
+    }
+    .uid.has { border-color: #2563eb; color: #2563eb; }
+    .msg {
+      margin-top: 1em;
+      padding: .8em;
+      border-radius: 6px;
+    }
+    .msg.ok { background: #d1fae5; color: #065f46; }
+    .msg.err { background: #fee2e2; color: #991b1b; }
+    .msg.info { background: #dbeafe; color: #1e3a8a; }
+    a { color: #2563eb; }
+  </style>
+</head>
+<body>
+  <h1>ลงทะเบียนบัตรพนักงาน</h1>
+
+  <label for="emp">เลือกชื่อพนักงาน</label>
+  <select id="emp"><option value="">— กำลังโหลดรายชื่อ —</option></select>
+
+  <div id="selected" class="selected" hidden>
+    <span class="selected-label">กำลังลงทะเบียนให้:</span>
+    <strong id="selectedName"></strong>
+  </div>
+
+  <label>แตะบัตรบนเครื่องอ่าน</label>
+  <div id="uid" class="uid">รอบัตร…</div>
+
+  <button id="register" disabled>ลงทะเบียน</button>
+
+  <div id="msg"></div>
+
+  <p style="margin-top:2em"><a href="/">← กลับหน้าหลัก</a></p>
+
+<script>
+(function () {
+  const empSel       = document.getElementById('emp');
+  const uidBox       = document.getElementById('uid');
+  const regBtn       = document.getElementById('register');
+  const msgBox       = document.getElementById('msg');
+  const selectedBox  = document.getElementById('selected');
+  const selectedName = document.getElementById('selectedName');
+
+  let currentUid = null;
+  let sessionExpiresAt = null;       // ms epoch; null when no name selected
+  const SESSION_MS = 60000;
+
+  function setMsg(kind, text) {
+    msgBox.className = 'msg ' + kind;
+    msgBox.textContent = text;
+  }
+
+  function refreshSelected() {
+    if (empSel.value) {
+      selectedName.textContent = empSel.value;
+      selectedBox.hidden = false;
+    } else {
+      selectedBox.hidden = true;
+    }
+  }
+
+  function clearSession(reasonMsg) {
+    currentUid = null;
+    uidBox.textContent = 'รอบัตร…';
+    uidBox.classList.remove('has');
+    empSel.value = '';
+    sessionExpiresAt = null;
+    refreshSelected();
+    refreshButton();
+    if (reasonMsg) setMsg('info', reasonMsg);
+  }
+
+  function tickCountdown() {
+    if (sessionExpiresAt == null) return;
+    const secLeft = Math.max(0, Math.ceil((sessionExpiresAt - Date.now()) / 1000));
+    if (secLeft <= 0) {
+      clearSession('ยกเลิกอัตโนมัติ (หมดเวลา 60 วินาที)');
+      return;
+    }
+    if (empSel.value) {
+      selectedName.textContent = empSel.value + ' (' + secLeft + 's)';
+    }
+  }
+
+  function refreshButton() {
+    regBtn.disabled = !(empSel.value && currentUid);
+  }
+
+  function loadEmployees() {
+    fetch('/api/employees-relay').then(r => r.json()).then(data => {
+      if (!data || !Array.isArray(data.employees)) {
+        setMsg('err', 'โหลดรายชื่อไม่สำเร็จ');
+        return;
+      }
+      empSel.innerHTML = '<option value="">— เลือก —</option>';
+      data.employees.forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name; opt.textContent = name;
+        empSel.appendChild(opt);
+      });
+      if (data.month) {
+        setMsg('info', 'รายชื่อจากเดือน ' + data.month);
+      }
+    }).catch(e => setMsg('err', 'โหลดรายชื่อไม่สำเร็จ: ' + e));
+  }
+
+  function pollLatestTap() {
+    const name = empSel.value || '';
+    const url = '/api/latest-tap?name=' + encodeURIComponent(name);
+    fetch(url).then(r => r.json()).then(data => {
+      if (data && data.card_uid) {
+        currentUid = data.card_uid;
+        uidBox.textContent = currentUid;
+        uidBox.classList.add('has');
+      }
+      refreshButton();
+    }).catch(() => {});
+  }
+
+  function doRegister(force) {
+    const body = {
+      employee_name: empSel.value,
+      card_uid: currentUid,
+      force: !!force,
+    };
+    setMsg('info', 'กำลังลงทะเบียน…');
+    fetch('/api/register-relay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(r => r.json()).then(data => {
+      if (data && data.status === 'ok') {
+        const tail = data.reassigned_from
+          ? ' (โอนจาก ' + data.reassigned_from + ')'
+          : '';
+        setMsg('ok', 'สำเร็จ' + tail);
+        // Reset for the next registration.
+        clearSession();
+      } else if (data && data.status === 'already_exists') {
+        let prompt;
+        if (data.existing_card) {
+          // Target employee already has a (different) card on file.
+          prompt = (data.current_owner || 'พนักงานนี้') +
+                   ' มีบัตรอยู่แล้ว (' + data.existing_card + ') ' +
+                   'ต้องการแทนที่ด้วยบัตรใหม่หรือไม่?';
+        } else {
+          // The card UID is currently mapped to a different employee.
+          const owner = data.current_owner || 'พนักงานอื่น';
+          prompt = 'บัตรนี้ลงทะเบียนกับ ' + owner + ' อยู่แล้ว ต้องการเขียนทับหรือไม่?';
+        }
+        if (confirm(prompt)) {
+          doRegister(true);
+        } else {
+          setMsg('info', 'ยกเลิกการเขียนทับ');
+        }
+      } else {
+        setMsg('err', 'ผิดพลาด: ' + (data && (data.error || data.status) || 'ไม่ทราบ'));
+      }
+    }).catch(e => setMsg('err', 'เชื่อมต่อไม่สำเร็จ: ' + e));
+  }
+
+  empSel.addEventListener('change', () => {
+    sessionExpiresAt = empSel.value ? (Date.now() + SESSION_MS) : null;
+    refreshSelected();
+    refreshButton();
+    tickCountdown();
+  });
+  regBtn.addEventListener('click', () => doRegister(false));
+
+  loadEmployees();
+  pollLatestTap();            // kick once immediately; setInterval lags 500ms
+  setInterval(pollLatestTap, 500);
+  setInterval(tickCountdown, 1000);
+})();
+</script>
+</body>
+</html>
