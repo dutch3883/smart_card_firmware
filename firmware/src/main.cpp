@@ -73,7 +73,12 @@ static constexpr uint16_t QR_BUFFER_BYTES =
 static constexpr uint32_t CARD_DISPLAY_MS          = 5000;  // hold UID screen 5 s
 static constexpr uint32_t CARD_POLL_MS             = 250;
 static constexpr uint16_t CARD_READ_TIMEOUT_MS     = 50;    // non-blocking poll
-static constexpr uint32_t CARD_DEDUP_MS            = 1500;
+// Same UID re-presented within this window is silently ignored. 30 s is
+// generous enough that a user "double-tapping" the reader produces one
+// queue entry, while still letting a legitimate retry (e.g., the operator
+// taps once, looks at the OLED, realises the wrong card, taps another)
+// register quickly.
+static constexpr uint32_t CARD_DEDUP_MS            = 30000;
 
 // ---- Globals --------------------------------------------------------------
 
