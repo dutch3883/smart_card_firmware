@@ -193,16 +193,20 @@ static constexpr uint32_t REG_SESSION_MS = 60000;  // auto-clear name after 60s 
 // ---- OTA auto-update (GitHub) --------------------------------------------
 //
 // Build-time version stamp. Operator bumps this when cutting a new release.
-// At runtime the device polls OTA_MANIFEST_URL (one line: "v1.2.3") and if
-// the published tag is lexicographically greater than FIRMWARE_VERSION, it
-// downloads firmware.bin from the matching GitHub Release asset and
-// self-flashes via HTTPUpdate. Bootloader handles dual-partition rollback
-// on a bad image.
+// At runtime the device asks GitHub for the *latest* release tag via
+// OTA_LATEST_URL (returns 302 → Location: .../releases/tag/<tag>). The tag
+// is parsed from Location and compared to FIRMWARE_VERSION; if newer the
+// device downloads firmware.bin from the matching Release asset and
+// self-flashes via HTTPUpdate.
+//
+// Why not raw.githubusercontent.com/.../latest.txt? That endpoint is CDN-
+// cached for 5 min, so newly-cut releases take up to 5 min to propagate.
+// /releases/latest carries `cache-control: no-cache` → instant pickup.
 #ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "v0.0.1"
 #endif
-static constexpr const char* OTA_MANIFEST_URL =
-    "https://raw.githubusercontent.com/dutch3883/smart_card_firmware/main/latest.txt";
+static constexpr const char* OTA_LATEST_URL =
+    "https://github.com/dutch3883/smart_card_firmware/releases/latest";
 // {VERSION} is replaced with the manifest's tag value at runtime.
 static constexpr const char* OTA_BIN_URL_TEMPLATE =
     "https://github.com/dutch3883/smart_card_firmware/releases/download/{VERSION}/firmware.bin";
@@ -546,28 +550,41 @@ static void otaOnProgress_(int cur, int total) {
 static bool checkOtaOnce_() {
   otaFlash_(CardFeedback::OtaChecking);
 
+  // GET /releases/latest — DON'T follow the redirect; we want the Location
+  // header itself, which carries the latest tag. cache-control: no-cache, so
+  // the tag we see here is always fresh (no 5-min CDN delay).
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
   http.setTimeout(HTTPS_TIMEOUT_MS);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!http.begin(client, OTA_MANIFEST_URL)) {
-    Serial.println(F("[ota] manifest http.begin failed"));
+  http.setFollowRedirects(HTTPC_DISABLE_FOLLOW_REDIRECTS);
+  static const char* collectHeaders[] = {"Location"};
+  http.collectHeaders(collectHeaders, 1);
+  if (!http.begin(client, OTA_LATEST_URL)) {
+    Serial.println(F("[ota] latest http.begin failed"));
     return false;
   }
   const int code = http.GET();
-  String latest = http.getString();
+  const String location = http.header("Location");
   http.end();
-  if (code != 200) {
-    Serial.printf("[ota] manifest GET → HTTP %d\n", code);
-    // Restore the previous screen by letting cardScreenUntilMs expire.
+  if (code != 302 || location.length() == 0) {
+    Serial.printf("[ota] /releases/latest → HTTP %d (no Location)\n", code);
     cardScreenUntilMs = 0;
     currentFeedback = CardFeedback::None;
     return false;
   }
+  // Location looks like: https://github.com/<owner>/<repo>/releases/tag/v0.2.4
+  const int tagIdx = location.lastIndexOf("/tag/");
+  if (tagIdx < 0) {
+    Serial.printf("[ota] unexpected Location: %s\n", location.c_str());
+    cardScreenUntilMs = 0;
+    currentFeedback = CardFeedback::None;
+    return false;
+  }
+  String latest = location.substring(tagIdx + 5);  // 5 = strlen("/tag/")
   latest.trim();
   if (latest.length() == 0 || latest.length() > 32) {
-    Serial.println(F("[ota] manifest empty or oversized"));
+    Serial.println(F("[ota] parsed tag empty or oversized"));
     cardScreenUntilMs = 0;
     currentFeedback = CardFeedback::None;
     return false;
