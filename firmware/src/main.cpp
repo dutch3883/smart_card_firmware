@@ -599,6 +599,8 @@ static bool checkOtaOnce_() {
   httpUpdate.setLedPin(LED_PIN, LOW);
   httpUpdate.rebootOnUpdate(true);
   httpUpdate.onProgress(otaOnProgress_);
+  // GitHub release URLs 302 to objects.githubusercontent.com — must follow.
+  httpUpdate.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
   const t_httpUpdate_return ret = httpUpdate.update(client, binUrl);
   switch (ret) {
     case HTTP_UPDATE_FAILED:
