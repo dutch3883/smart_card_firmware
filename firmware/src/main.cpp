@@ -431,6 +431,7 @@ static bool sendTap_(const String& path) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("Authorization", String("Bearer ") + bearerToken);
 
+  Serial.printf("[sync] POST body: %s\n", body.c_str());
   int httpCode = http.POST(body);
   String resp = http.getString();
   if (httpCode == 302) {
@@ -1479,6 +1480,39 @@ static void handleEmployeesRelay() {
   server.send(code, "application/json", body);
 }
 
+// Ad-hoc tap test — fires a /tap to the receiver using the device's
+// stored bearer token and current wall clock. Lets the operator (or a
+// debug curl) verify that a given UID resolves to a name without
+// touching the physical card. Gated by ?pin=<ADMIN_PIN> so it can be
+// hit with a one-line curl that doesn't need the cookie dance.
+//
+// curl 'http://<ip>/api/test-tap?pin=908724&uid=3C36A31E'
+static void handleTestTap() {
+  const String pin = server.hasArg("pin") ? server.arg("pin") : String();
+  if (pin != ADMIN_PIN) {
+    server.send(401, "application/json",
+                "{\"status\":\"error\",\"error\":\"bad_pin\"}");
+    return;
+  }
+  const String uid = server.hasArg("uid") ? server.arg("uid") : String();
+  if (uid.length() == 0) {
+    server.send(400, "application/json",
+                "{\"status\":\"error\",\"error\":\"missing_uid\"}");
+    return;
+  }
+  char iso[40];
+  formatIso8601Bangkok_(time(nullptr), iso, sizeof(iso));
+  char eventId[32];
+  buildEventId_(eventId, sizeof(eventId));
+  // Build the JSON tap body manually to keep the path simple.
+  String body = String("{\"card_uid\":\"") + uid +
+                "\",\"captured_at\":\"" + iso +
+                "\",\"event_id\":\"test-" + eventId + "\"}";
+  String out;
+  int code = httpsRelay_("POST", "route=tap", body, out);
+  server.send(code, "application/json", out);
+}
+
 static void handleRegisterRelay() {
   if (!requirePin_()) return;
   if (!server.hasArg("plain")) {
@@ -1735,6 +1769,7 @@ static void enterStaMode() {
     server.on("/api/latest-tap", HTTP_GET, handleLatestTap);
     server.on("/api/employees-relay", HTTP_GET, handleEmployeesRelay);
     server.on("/api/register-relay", HTTP_POST, handleRegisterRelay);
+    server.on("/api/test-tap", HTTP_GET, handleTestTap);
     server.onNotFound(handleNotFound);
     // Required so requirePin_() can read the session cookie.
     {
